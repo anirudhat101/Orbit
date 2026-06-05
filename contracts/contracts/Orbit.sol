@@ -3,26 +3,23 @@ pragma solidity ^0.8.24;
 
 import "./interfaces/ISomniaAgents.sol";
 
-/// @title Orbit
-/// @notice Natural language → blockchain intelligence → live dashboards
-/// @dev Uses inferToolsChat for native LLM tool calling with yield-resume pattern.
-///   Flow: ask() → LLM selects tools → spawn Somnia agents → resume LLM → dashboard
-///
-/// AGENTS: LLM Inference (12847293847561029384)
-///         JSON API Request (13174292974160097713)
-///         LLM Parse Website (12875401142070969085)
+interface IDex {
+    function getPoolId(address tokenA, address tokenB) external view returns (bytes32);
+    function pools(bytes32 id) external view returns (address token0, address token1, uint256 reserve0, uint256 reserve1, uint256 totalSupply);
+}
 
 contract Orbit {
     IAgentRequester public constant PLATFORM =
         IAgentRequester(0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776);
 
-    uint256 public constant JSON_API_AGENT_ID = 13174292974160097713;
     uint256 public constant LLM_AGENT_ID = 12847293847561029384;
-    uint256 public constant PARSE_WEBSITE_AGENT_ID = 12875401142070969085;
+    uint256 public constant SUBCOMMITTEE_SIZE = 3;
+    uint256 public constant PRICE_PER_AGENT = 0.1 ether;
 
-    bytes4 private constant GET_PRICE = bytes4(keccak256("getPrice(string,string)"));
-    bytes4 private constant ANALYZE_SENTIMENT = bytes4(keccak256("analyzeSentiment(string)"));
-    bytes4 private constant SCRAPE_WEB = bytes4(keccak256("scrapeWeb(string,string)"));
+    bytes4 private constant SWAP = bytes4(keccak256("swap(address,address,uint256)"));
+    bytes4 private constant PING = bytes4(keccak256("ping()"));
+
+    IDex public dex;
 
     enum Phase { Idle, AwaitingSelection, ExecutingTools, AwaitingSynthesis, Complete }
 
@@ -54,21 +51,24 @@ contract Orbit {
 
     uint256 public nextQueryId = 1;
 
-    event Asked(uint256 indexed queryId, address indexed user, string nlQuery);
+    event Asked(uint256 indexed queryId, address indexed user, string nlQuery, uint256 requestId);
     event ToolsChosen(uint256 indexed queryId, bytes4[] selectors, string[] toolCallIds);
     event ToolDone(uint256 indexed queryId, uint256 toolIndex, string toolCallId, bytes result);
-    event Answered(uint256 indexed queryId, bytes dashboardPayload);
+    event Answered(uint256 indexed queryId, bytes dashboardPayload, uint256 requestId);
     event Failed(uint256 indexed queryId, string reason);
 
-    // ──────────────────────────────────────────────
-    // Entry
-    // ──────────────────────────────────────────────
+    constructor(IDex _dex) {
+        dex = _dex;
+    }
 
-    /// @notice Ask Orbit a natural language question
-    /// @param nlQuery The query (e.g., "Give me yesterday's BTC price")
-    /// @dev Send enough ETH for all steps (recommended: 5x getRequestDeposit())
+    function setDex(IDex _dex) external {
+        dex = _dex;
+    }
+
+    // ── Entry ──
+
     function ask(string calldata nlQuery) external payable returns (uint256 queryId) {
-        uint256 deposit = PLATFORM.getRequestDeposit();
+        uint256 deposit = PLATFORM.getRequestDeposit() + PRICE_PER_AGENT * SUBCOMMITTEE_SIZE;
         require(msg.value >= deposit, "Insufficient deposit");
 
         queryId = nextQueryId++;
@@ -84,18 +84,19 @@ contract Orbit {
         roles[1] = "user";
 
         string[] memory messages = new string[](2);
-        messages[0] = "You are Orbit, an on-chain blockchain intelligence agent. You have access to tools for fetching crypto data. Decide which tools to call, then synthesize results into a JSON dashboard. Return ONLY the JSON dashboard as your final answer. Dashboard format: {\"summary\":\"...\",\"cards\":[{\"type\":\"price\",\"label\":\"...\",\"value\":0,\"change\":0,\"unit\":\"usd\"}],\"chart\":[{\"label\":\"...\",\"value\":0}]}";
+        messages[0] = "You are Orbit, an on-chain blockchain intelligence agent. You have access to swap and Coingecko tools. Decide which tools to call, then synthesize results into a JSON dashboard. Return ONLY the JSON dashboard as your final answer. Dashboard format: {\"summary\":\"...\",\"cards\":[{\"type\":\"price\",\"label\":\"...\",\"value\":0,\"change\":0,\"unit\":\"usd\"}],\"chart\":[{\"label\":\"...\",\"value\":0}]}";
         messages[1] = string.concat("Query: \"", nlQuery, "\"");
 
-        ILLMAgent.OnchainTool[] memory onchainTools = new ILLMAgent.OnchainTool[](3);
-        onchainTools[0] = ILLMAgent.OnchainTool("getPrice(string asset, string vsCurrency)", "Fetch crypto price from CoinGecko. asset is coin id like 'bitcoin', 'ethereum'. vsCurrency is 'usd'.");
-        onchainTools[1] = ILLMAgent.OnchainTool("analyzeSentiment(string text)", "Analyze crypto market sentiment of text. Returns bullish/bearish/neutral.");
-        onchainTools[2] = ILLMAgent.OnchainTool("scrapeWeb(string url, string prompt)", "Extract info from a website. url is domain or full URL. prompt describes what to extract.");
+        ILLMAgent.OnchainTool[] memory onchainTools = new ILLMAgent.OnchainTool[](2);
+        onchainTools[0] = ILLMAgent.OnchainTool("swap(address tokenIn, address tokenOut, uint256 amountIn)", "Get swap quote from the DEX. Returns estimated output amount.");
+        onchainTools[1] = ILLMAgent.OnchainTool("ping()", "Test tool that returns pong.");
+
+        string[] memory mcpUrls = new string[](0);
 
         bytes memory payload = abi.encodeWithSelector(
             ILLMAgent.inferToolsChat.selector,
             roles, messages,
-            new string[](0),
+            mcpUrls,
             onchainTools,
             5,
             true
@@ -110,12 +111,10 @@ contract Orbit {
 
         q.budget -= deposit;
         agentRequestToQuery[requestId] = queryId;
-        emit Asked(queryId, msg.sender, nlQuery);
+        emit Asked(queryId, msg.sender, nlQuery, requestId);
     }
 
-    // ──────────────────────────────────────────────
-    // Tool selection callback
-    // ──────────────────────────────────────────────
+    // ── Tool selection callback ──
 
     function handleToolSelection(
         uint256 requestId,
@@ -148,7 +147,7 @@ contract Orbit {
             q.dashboardPayload = bytes(response);
             q.phase = Phase.Complete;
             _refund(q, queryId);
-            emit Answered(queryId, bytes(response));
+            emit Answered(queryId, bytes(response), 0);
             return;
         }
 
@@ -168,7 +167,7 @@ contract Orbit {
         }
         emit ToolsChosen(queryId, selectors, toolCallIds);
 
-        uint256 deposit = PLATFORM.getRequestDeposit();
+        uint256 deposit = PLATFORM.getRequestDeposit() + PRICE_PER_AGENT * SUBCOMMITTEE_SIZE;
 
         for (uint256 i = 0; i < toolCalls.length; i++) {
             require(q.budget >= deposit, "Insufficient budget");
@@ -182,21 +181,38 @@ contract Orbit {
             exec.selector = selector;
             exec.params = params;
 
-            (bytes memory agentPayload, uint256 agentId) = _mapToolToAgent(selector, params);
-
-            if (agentPayload.length > 0 && agentId > 0) {
-                uint256 reqId = PLATFORM.createRequest{value: deposit}(
-                    agentId,
-                    address(this),
-                    this.handleToolResult.selector,
-                    agentPayload
-                );
-                exec.agentRequestId = reqId;
-                q.budget -= deposit;
-                agentRequestToQuery[reqId] = queryId;
-                agentRequestToToolIdx[reqId] = i;
-            } else {
+            if (selector == SWAP) {
+                (address tokenIn, address tokenOut, uint256 amountIn) = abi.decode(params, (address, address, uint256));
+                bytes32 poolId = dex.getPoolId(tokenIn, tokenOut);
+                (address t0, , uint256 rsv0, uint256 rsv1, ) = dex.pools(poolId);
+                bool isToken0 = tokenIn == t0;
+                uint256 reserveIn = isToken0 ? rsv0 : rsv1;
+                uint256 reserveOut = isToken0 ? rsv1 : rsv0;
+                uint256 amountInWithFee = (amountIn * 997) / 1000;
+                uint256 amountOut = (reserveOut * amountInWithFee) / (reserveIn + amountInWithFee);
+                exec.result = abi.encode(amountOut);
                 q.pendingCount--;
+                emit ToolDone(queryId, i, exec.toolCallId, exec.result);
+            } else if (selector == PING) {
+                exec.result = abi.encode("pong");
+                q.pendingCount--;
+                emit ToolDone(queryId, i, exec.toolCallId, exec.result);
+            } else {
+                (bytes memory agentPayload, uint256 agentId) = _mapToolToAgent(selector, params);
+                if (agentPayload.length > 0 && agentId > 0) {
+                    uint256 reqId = PLATFORM.createRequest{value: deposit}(
+                        agentId,
+                        address(this),
+                        this.handleToolResult.selector,
+                        agentPayload
+                    );
+                    exec.agentRequestId = reqId;
+                    q.budget -= deposit;
+                    agentRequestToQuery[reqId] = queryId;
+                    agentRequestToToolIdx[reqId] = i;
+                } else {
+                    q.pendingCount--;
+                }
             }
         }
 
@@ -205,9 +221,7 @@ contract Orbit {
         }
     }
 
-    // ──────────────────────────────────────────────
-    // Tool execution callback
-    // ──────────────────────────────────────────────
+    // ── Tool execution callback ──
 
     function handleToolResult(
         uint256 requestId,
@@ -236,9 +250,7 @@ contract Orbit {
         }
     }
 
-    // ──────────────────────────────────────────────
-    // Resume LLM with tool results
-    // ──────────────────────────────────────────────
+    // ── Resume LLM with tool results ──
 
     function _resumeAndSynthesize(uint256 queryId) internal {
         Query storage q = queries[queryId];
@@ -278,7 +290,7 @@ contract Orbit {
             true
         );
 
-        uint256 deposit = PLATFORM.getRequestDeposit();
+        uint256 deposit = PLATFORM.getRequestDeposit() + PRICE_PER_AGENT * SUBCOMMITTEE_SIZE;
         require(q.budget >= deposit, "Insufficient budget for synthesis");
 
         uint256 newRequestId = PLATFORM.createRequest{value: deposit}(
@@ -292,9 +304,7 @@ contract Orbit {
         agentRequestToQuery[newRequestId] = queryId;
     }
 
-    // ──────────────────────────────────────────────
-    // Final synthesis callback
-    // ──────────────────────────────────────────────
+    // ── Final synthesis callback ──
 
     function handleSynthesis(
         uint256 requestId,
@@ -311,7 +321,7 @@ contract Orbit {
             q.dashboardPayload = responses[0].result;
             q.phase = Phase.Complete;
             _refund(q, queryId);
-            emit Answered(queryId, q.dashboardPayload);
+            emit Answered(queryId, q.dashboardPayload, requestId);
         } else {
             _refund(q, queryId);
             emit Failed(queryId, "Synthesis failed");
@@ -319,76 +329,22 @@ contract Orbit {
         }
     }
 
-    // ──────────────────────────────────────────────
-    // Tool → Agent mapping
-    // ──────────────────────────────────────────────
+    // ── Tool → Agent mapping ──
 
-    function _mapToolToAgent(bytes4 selector, bytes memory params) internal pure returns (bytes memory, uint256) {
-        if (selector == GET_PRICE) {
-            (string memory asset, string memory vsCurrency) = abi.decode(params, (string, string));
-            return _buildPricePayload(asset, vsCurrency);
-        }
-        if (selector == ANALYZE_SENTIMENT) {
-            (string memory text) = abi.decode(params, (string));
-            return _buildSentimentPayload(text);
-        }
-        if (selector == SCRAPE_WEB) {
-            (string memory url, string memory prompt) = abi.decode(params, (string, string));
-            return _buildScrapePayload(url, prompt);
-        }
+    function _mapToolToAgent(bytes4, bytes memory) internal pure returns (bytes memory, uint256) {
         return (bytes(""), 0);
     }
 
-    function _buildPricePayload(string memory asset, string memory vsCurrency) internal pure returns (bytes memory, uint256) {
-        string memory url = string.concat(
-            "https://api.coingecko.com/api/v3/simple/price?ids=",
-            asset, "&vs_currencies=", vsCurrency
-        );
-        string memory selector = string.concat(asset, ".", vsCurrency);
-
-        bytes memory payload = abi.encodeWithSelector(
-            IJsonApiAgent.fetchUint.selector, url, selector, uint8(8)
-        );
-        return (payload, JSON_API_AGENT_ID);
-    }
-
-    function _buildSentimentPayload(string memory text) internal pure returns (bytes memory, uint256) {
-        string memory prompt = string.concat(
-            "Analyze the sentiment of this crypto text: \"", text, "\". "
-            "Classify as bullish, bearish, or neutral."
-        );
-
-        string[] memory allowed = new string[](3);
-        allowed[0] = "bullish";
-        allowed[1] = "bearish";
-        allowed[2] = "neutral";
-
-        bytes memory payload = abi.encodeWithSelector(
-            ILLMAgent.inferString.selector, prompt,
-            "You are a crypto sentiment analyst.", false, allowed
-        );
-        return (payload, LLM_AGENT_ID);
-    }
-
-    function _buildScrapePayload(string memory url, string memory prompt) internal pure returns (bytes memory, uint256) {
-        string[] memory options = new string[](0);
-
-        bytes memory payload = abi.encodeWithSelector(
-            IParseWebsiteAgent.ExtractString.selector,
-            "result", prompt, options, prompt, url, true, uint8(3)
-        );
-        return (payload, PARSE_WEBSITE_AGENT_ID);
-    }
-
-    // ──────────────────────────────────────────────
-    // Helpers
-    // ──────────────────────────────────────────────
+    // ── Helpers ──
 
     function _formatResult(bytes4 selector, bytes memory data) internal pure returns (string memory) {
         if (data.length == 0) return "empty";
-        if (selector == GET_PRICE) {
+        if (selector == SWAP) {
             uint256 val = abi.decode(data, (uint256));
             return _uintToString(val);
+        }
+        if (selector == PING) {
+            return abi.decode(data, (string));
         }
         return abi.decode(data, (string));
     }

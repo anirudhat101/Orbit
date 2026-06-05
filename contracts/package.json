@@ -13,6 +13,8 @@
     "invoke:extractor": "hardhat run 03-web-data-extractor/scripts/invoke.ts --network somnia",
     "deploy:gpt": "hardhat run 04-somnia-gpt/scripts/deploy.ts --network somnia",
     "invoke:gpt": "hardhat run 04-somnia-gpt/scripts/invoke.ts --network somnia",
+    "deploy:orbit": "hardhat run scripts/deploy.ts --network somnia",
+    "invoke:orbit": "hardhat run scripts/invoke.ts --network somnia"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",
@@ -37,7 +39,7 @@
     "solidity-coverage": "^0.8.17",
     "ts-node": "10.9.2",
     "typechain": "^8.3.2",
-    "typescript": "5.8.3",
+    "typescript": "^4.9.5",
     "viem": "^2.51.0"
   }
 }
