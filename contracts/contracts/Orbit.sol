@@ -3,11 +3,6 @@ pragma solidity ^0.8.24;
 
 import "./interfaces/ISomniaAgents.sol";
 
-interface IDex {
-    function getPoolId(address tokenA, address tokenB) external view returns (bytes32);
-    function pools(bytes32 id) external view returns (address token0, address token1, uint256 reserve0, uint256 reserve1, uint256 totalSupply);
-}
-
 contract Orbit {
     IAgentRequester public constant PLATFORM =
         IAgentRequester(0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776);
@@ -16,10 +11,13 @@ contract Orbit {
     uint256 public constant SUBCOMMITTEE_SIZE = 3;
     uint256 public constant PRICE_PER_AGENT = 0.1 ether;
 
-    bytes4 private constant SWAP = bytes4(keccak256("swap(address,address,uint256)"));
+    bytes4 private constant SWAP = bytes4(keccak256("swap(string,string,uint256)"));
     bytes4 private constant PING = bytes4(keccak256("ping()"));
 
-    IDex public dex;
+    address public constant QUICKSWAP = 0xE94de02e52Eaf9F0f6Bf7f16E4927FcBc2c09bC7;
+    address public constant USDC = 0xE9CC37904875B459Fa5D0FE37680d36F1ED55e38;
+    address public constant WETH = 0xd2480162Aa7F02Ead7BF4C127465446150D58452;
+    address public constant WSTT = 0x4A3BC48C156384f9564Fd65A53a2f3D534D8f2b7;
 
     enum Phase { Idle, AwaitingSelection, ExecutingTools, AwaitingSynthesis, Complete }
 
@@ -57,14 +55,6 @@ contract Orbit {
     event Answered(uint256 indexed queryId, bytes dashboardPayload, uint256 requestId);
     event Failed(uint256 indexed queryId, string reason);
 
-    constructor(IDex _dex) {
-        dex = _dex;
-    }
-
-    function setDex(IDex _dex) external {
-        dex = _dex;
-    }
-
     // ── Entry ──
 
     function ask(string calldata nlQuery) external payable returns (uint256 queryId) {
@@ -84,11 +74,11 @@ contract Orbit {
         roles[1] = "user";
 
         string[] memory messages = new string[](2);
-        messages[0] = "You are Orbit, an on-chain blockchain intelligence agent. You have access to swap and Coingecko tools. Decide which tools to call, then synthesize results into a JSON dashboard. Return ONLY the JSON dashboard as your final answer. Dashboard format: {\"summary\":\"...\",\"cards\":[{\"type\":\"price\",\"label\":\"...\",\"value\":0,\"change\":0,\"unit\":\"usd\"}],\"chart\":[{\"label\":\"...\",\"value\":0}]}";
+        messages[0] = "You are Orbit, an on-chain blockchain intelligence agent. You help users prepare Quickswap swaps. Supported tokens: STT (native), USDC, WETH, WSTT. If user asks for unsupported tokens, say not supported. You do NOT execute swaps - you prepare the params. Use the swap tool to validate tokens and get params. Return ONLY valid JSON in this format: {\"answer\":\"<response>\",\"swap\":{\"contract\":\"0x...\",\"tokenIn\":\"0x...\",\"tokenOut\":\"0x...\",\"amountIn\":0,\"amountOutMinimum\":0}}";
         messages[1] = string.concat("Query: \"", nlQuery, "\"");
 
         ILLMAgent.OnchainTool[] memory onchainTools = new ILLMAgent.OnchainTool[](2);
-        onchainTools[0] = ILLMAgent.OnchainTool("swap(address tokenIn, address tokenOut, uint256 amountIn)", "Get swap quote from the DEX. Returns estimated output amount.");
+        onchainTools[0] = ILLMAgent.OnchainTool("swap(string tokenInSymbol, string tokenOutSymbol, uint256 amountIn)", "Prepare a Quickswap exactInputSingle swap. tokenInSymbol and tokenOutSymbol are token symbols like STT, USDC, WETH, WSTT. amountIn is in wei. Returns the swap function call params for the user to execute.");
         onchainTools[1] = ILLMAgent.OnchainTool("ping()", "Test tool that returns pong.");
 
         string[] memory mcpUrls = new string[](0);
@@ -182,15 +172,24 @@ contract Orbit {
             exec.params = params;
 
             if (selector == SWAP) {
-                (address tokenIn, address tokenOut, uint256 amountIn) = abi.decode(params, (address, address, uint256));
-                bytes32 poolId = dex.getPoolId(tokenIn, tokenOut);
-                (address t0, , uint256 rsv0, uint256 rsv1, ) = dex.pools(poolId);
-                bool isToken0 = tokenIn == t0;
-                uint256 reserveIn = isToken0 ? rsv0 : rsv1;
-                uint256 reserveOut = isToken0 ? rsv1 : rsv0;
-                uint256 amountInWithFee = (amountIn * 997) / 1000;
-                uint256 amountOut = (reserveOut * amountInWithFee) / (reserveIn + amountInWithFee);
-                exec.result = abi.encode(amountOut);
+                (string memory tokenInSymbol, string memory tokenOutSymbol, uint256 amountIn) = abi.decode(params, (string, string, uint256));
+                address tokenIn = _resolveToken(tokenInSymbol);
+                address tokenOut = _resolveToken(tokenOutSymbol);
+                string memory result;
+                if (tokenIn == address(0) && !_isSTT(tokenInSymbol)) {
+                    result = string.concat("Unsupported token: ", tokenInSymbol);
+                } else if (tokenOut == address(0) && !_isSTT(tokenOutSymbol)) {
+                    result = string.concat("Unsupported token: ", tokenOutSymbol);
+                } else {
+                    result = string.concat(
+                        "Quickswap exactInputSingle on ", _addressToString(QUICKSWAP),
+                        " | tokenIn: ", _addressToString(tokenIn),
+                        " | tokenOut: ", _addressToString(tokenOut),
+                        " | amountIn: ", _uintToString(amountIn),
+                        " | fee: 3000 | recipient: <user> | deadline: <now+5min>"
+                    );
+                }
+                exec.result = abi.encode(result);
                 q.pendingCount--;
                 emit ToolDone(queryId, i, exec.toolCallId, exec.result);
             } else if (selector == PING) {
@@ -337,13 +336,38 @@ contract Orbit {
 
     // ── Helpers ──
 
+    function _resolveToken(string memory symbol) internal pure returns (address) {
+        if (_eq(symbol, "USDC") || _eq(symbol, "usdc")) return USDC;
+        if (_eq(symbol, "WETH") || _eq(symbol, "weth")) return WETH;
+        if (_eq(symbol, "WSTT") || _eq(symbol, "wstt")) return WSTT;
+        if (_isSTT(symbol)) return address(0);
+        return address(0);
+    }
+
+    function _isSTT(string memory symbol) internal pure returns (bool) {
+        return _eq(symbol, "STT") || _eq(symbol, "stt");
+    }
+
+    function _addressToString(address a) internal pure returns (string memory) {
+        bytes32 v = bytes32(bytes20(a));
+        bytes memory r = new bytes(42);
+        r[0] = "0";
+        r[1] = "x";
+        for (uint256 i = 0; i < 20; i++) {
+            r[2 + i * 2] = _nibble(uint8(v[i + 12]) >> 4);
+            r[3 + i * 2] = _nibble(uint8(v[i + 12]) & 0xf);
+        }
+        return string(r);
+    }
+
+    function _nibble(uint8 n) internal pure returns (bytes1) {
+        if (n < 10) return bytes1(48 + n);
+        return bytes1(87 + n);
+    }
+
     function _formatResult(bytes4 selector, bytes memory data) internal pure returns (string memory) {
         if (data.length == 0) return "empty";
-        if (selector == SWAP) {
-            uint256 val = abi.decode(data, (uint256));
-            return _uintToString(val);
-        }
-        if (selector == PING) {
+        if (selector == SWAP || selector == PING) {
             return abi.decode(data, (string));
         }
         return abi.decode(data, (string));
