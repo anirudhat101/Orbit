@@ -9,7 +9,7 @@ contract Orbit {
 
     uint256 public constant LLM_AGENT_ID = 12847293847561029384;
     uint256 public constant SUBCOMMITTEE_SIZE = 3;
-    uint256 public constant PRICE_PER_AGENT = 0.1 ether;
+    uint256 public constant PRICE_PER_AGENT = 0.07 ether;
 
     bytes4 private constant SWAP = bytes4(keccak256("swap(string,string,uint256)"));
     bytes4 private constant PING = bytes4(keccak256("ping()"));
@@ -74,14 +74,15 @@ contract Orbit {
         roles[1] = "user";
 
         string[] memory messages = new string[](2);
-        messages[0] = "You are Orbit, an on-chain blockchain intelligence agent. You help users prepare Quickswap swaps. Supported tokens: STT (native), USDC, WETH, WSTT. If user asks for unsupported tokens, say not supported. You do NOT execute swaps - you prepare the params. Use the swap tool to validate tokens and get params. Return ONLY valid JSON in this format: {\"answer\":\"<response>\",\"swap\":{\"contract\":\"0x...\",\"tokenIn\":\"0x...\",\"tokenOut\":\"0x...\",\"amountIn\":0,\"amountOutMinimum\":0}}";
+        messages[0] = "You are Orbit, an on-chain blockchain intelligence agent. You help users prepare Quickswap swaps. Supported tokens: STT (native, address=0x0000000000000000000000000000000000000000), USDC (0xE9CC37904875B459Fa5D0FE37680d36F1ED55e38), WETH (0xd2480162Aa7F02Ead7BF4C127465446150D58452), WSTT (0x4A3BC48C156384f9564Fd65A53a2f3D534D8f2b7). Quickswap contract: 0xE94de02e52Eaf9F0f6Bf7f16E4927FcBc2c09bC7. Available: Onchain-data MCP for token prices and holders. If user asks for unsupported tokens, say not supported. You do NOT execute swaps - you prepare the params. For swap queries, return the JSON directly (do not call the swap tool). Use the amount the user said as-is (e.g. if they say 0.001, amountIn=0.001). Return ONLY valid JSON in this format: {\"answer\":\"<response>\",\"swap\":{\"contract\":\"0xE94de02e52Eaf9F0f6Bf7f16E4927FcBc2c09bC7\",\"tokenIn\":\"0x...\",\"tokenOut\":\"0x...\",\"amountIn\":<amount>,\"amountOutMinimum\":0}}. For price queries, use the onchain-data MCP. For any other query that needs a tool, call the appropriate tool.";
         messages[1] = string.concat("Query: \"", nlQuery, "\"");
 
         ILLMAgent.OnchainTool[] memory onchainTools = new ILLMAgent.OnchainTool[](2);
         onchainTools[0] = ILLMAgent.OnchainTool("swap(string tokenInSymbol, string tokenOutSymbol, uint256 amountIn)", "Prepare a Quickswap exactInputSingle swap. tokenInSymbol and tokenOutSymbol are token symbols like STT, USDC, WETH, WSTT. amountIn is in wei. Returns the swap function call params for the user to execute.");
         onchainTools[1] = ILLMAgent.OnchainTool("ping()", "Test tool that returns pong.");
 
-        string[] memory mcpUrls = new string[](0);
+        string[] memory mcpUrls = new string[](1);
+        mcpUrls[0] = "https://mcp-server-ruby-xi.vercel.app/mcp";
 
         bytes memory payload = abi.encodeWithSelector(
             ILLMAgent.inferToolsChat.selector,
@@ -280,10 +281,13 @@ contract Orbit {
 
         ILLMAgent.OnchainTool[] memory emptyTools = new ILLMAgent.OnchainTool[](0);
 
+        string[] memory resumeMcpUrls = new string[](1);
+        resumeMcpUrls[0] = "https://mcp-server-ruby-xi.vercel.app/mcp";
+
         bytes memory payload = abi.encodeWithSelector(
             ILLMAgent.inferToolsChat.selector,
             resumeRoles, resumeMessages,
-            new string[](0),
+            resumeMcpUrls,
             emptyTools,
             1,
             true

@@ -1,18 +1,18 @@
 import hre from "hardhat";
 import { formatUnits, hexToString } from "viem";
-
-const CONTRACT_ADDRESS = "0xa9299fd4c29a6fa66bf4b1fce68f694d02625c75" as `0x${string}`;
+// 0x0ed8db1c8867a2e77d8f25b62cb21723f78839ce
+const CONTRACT_ADDRESS = "0x72ee8c2eea0be925ef44c489f16b55237e27eacf" as `0x${string}`;
 const POLL_INTERVAL = 3000;
 const TIMEOUT = 300_000;
 const SUBCOMMITTEE_SIZE = 3n;
-const PRICE_PER_AGENT = BigInt("100000000000000000"); // 0.1 ether
+const PRICE_PER_AGENT = BigInt("70000000000000000"); // 0.07 ether
 
 async function main() {
   console.log("╔════════════════════════════════════════════╗");
   console.log("║        Orbit — Ask a Question          ║");
   console.log("╚════════════════════════════════════════════╝\n");
 
-  const query = process.argv[2] || "swap 0.1 stt to wstt";
+  const query = process.argv[2] || "get price of eth. also mention whihc tool you used to get the answer"//"swap 0.1 stt to wstt";
   console.log(`Query: "${query}"\n`);
 
   const orbit = await hre.viem.getContractAt("Orbit", CONTRACT_ADDRESS);
