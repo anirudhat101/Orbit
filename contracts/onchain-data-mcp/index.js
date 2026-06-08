@@ -79,6 +79,207 @@ function createServer() {
     }
   );
 
+  srv.registerTool(
+    "get_wallet_net_worth",
+    {
+      title: "Get Wallet Net Worth",
+      description: "Calculate the total net worth of a wallet in USD across multiple chains",
+      inputSchema: z.object({
+        address: z.string().describe("The wallet address"),
+        chains: z.string().optional().describe("Comma-separated chain names to query (e.g. eth,polygon,bsc)"),
+        exclude_spam: z.boolean().default(true).describe("Exclude spam tokens from calculation"),
+        exclude_unverified_contracts: z.boolean().default(true).describe("Exclude unverified contracts from calculation"),
+      }),
+    },
+    async (args) => {
+      const validated = z.object({
+        address: z.string(),
+        chains: z.string().optional(),
+        exclude_spam: z.boolean().default(true),
+        exclude_unverified_contracts: z.boolean().default(true),
+      }).parse(args);
+      let path = `/wallets/${validated.address}/net-worth?exclude_spam=${validated.exclude_spam}&exclude_unverified_contracts=${validated.exclude_unverified_contracts}`;
+      if (validated.chains) {
+        path += `&chains=${validated.chains}`;
+      }
+      const data = await moralisFetch(path);
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    }
+  );
+
+  srv.registerTool(
+    "get_wallet_pnl_summary",
+    {
+      title: "Get Wallet PnL Summary",
+      description: "Get a profit and loss summary for a given wallet over a specified timeframe",
+      inputSchema: z.object({
+        address: z.string().describe("The wallet address"),
+        chain: z.string().default("eth").describe("The chain (eth, polygon, bsc, etc.)"),
+        days: z.string().default("all").describe("Timeframe in days: 'all', '7', '30', '60', '90'"),
+      }),
+    },
+    async (args) => {
+      const validated = z.object({
+        address: z.string(),
+        chain: z.string().default("eth"),
+        days: z.string().default("all"),
+      }).parse(args);
+      const data = await moralisFetch(`/wallets/${validated.address}/profitability/summary?chain=${validated.chain}&days=${validated.days}`);
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    }
+  );
+
+  srv.registerTool(
+    "get_token_transfers",
+    {
+      title: "Get Token Transfers by Wallet",
+      description: "Get all ERC20 token transfers for a given wallet address, sorted by block number (newest first)",
+      inputSchema: z.object({
+        address: z.string().describe("The wallet address"),
+        chain: z.string().default("eth").describe("The chain (eth, polygon, bsc, etc.)"),
+        limit: z.number().int().min(1).max(100).optional().describe("Number of results to return (max 100)"),
+        cursor: z.string().optional().describe("Cursor for pagination"),
+      }),
+    },
+    async (args) => {
+      const validated = z.object({
+        address: z.string(),
+        chain: z.string().default("eth"),
+        limit: z.number().int().min(1).max(100).optional(),
+        cursor: z.string().optional(),
+      }).parse(args);
+      let path = `/${validated.address}/erc20/transfers?chain=${validated.chain}`;
+      if (validated.limit) path += `&limit=${validated.limit}`;
+      if (validated.cursor) path += `&cursor=${validated.cursor}`;
+      const data = await moralisFetch(path);
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    }
+  );
+
+  srv.registerTool(
+    "get_nfts_by_wallet",
+    {
+      title: "Get NFTs by Wallet",
+      description: "Get all NFTs (ERC721 and ERC1155) owned by a wallet address",
+      inputSchema: z.object({
+        address: z.string().describe("The wallet address"),
+        chain: z.string().default("eth").describe("The chain (eth, polygon, bsc, etc.)"),
+        limit: z.number().int().min(1).max(100).optional().describe("Number of results to return (max 100)"),
+        cursor: z.string().optional().describe("Cursor for pagination"),
+      }),
+    },
+    async (args) => {
+      const validated = z.object({
+        address: z.string(),
+        chain: z.string().default("eth"),
+        limit: z.number().int().min(1).max(100).optional(),
+        cursor: z.string().optional(),
+      }).parse(args);
+      let path = `/${validated.address}/nft?chain=${validated.chain}`;
+      if (validated.limit) path += `&limit=${validated.limit}`;
+      if (validated.cursor) path += `&cursor=${validated.cursor}`;
+      const data = await moralisFetch(path);
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    }
+  );
+
+  srv.registerTool(
+    "get_token_transfers_by_contract",
+    {
+      title: "Get Token Transfers by Contract",
+      description: "Get all ERC20 token transfers for a contract address, ordered by block number (newest first)",
+      inputSchema: z.object({
+        address: z.string().describe("The ERC20 token contract address"),
+        chain: z.string().default("eth").describe("The chain (eth, polygon, bsc, etc.)"),
+        from_block: z.number().int().optional().describe("Start block number"),
+        to_block: z.number().int().optional().describe("End block number"),
+        limit: z.number().int().min(1).max(100).optional().describe("Number of results to return (max 100)"),
+        cursor: z.string().optional().describe("Cursor for pagination"),
+      }),
+    },
+    async (args) => {
+      const validated = z.object({
+        address: z.string(),
+        chain: z.string().default("eth"),
+        from_block: z.number().int().optional(),
+        to_block: z.number().int().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+        cursor: z.string().optional(),
+      }).parse(args);
+      let path = `/erc20/${validated.address}/transfers?chain=${validated.chain}`;
+      if (validated.from_block) path += `&from_block=${validated.from_block}`;
+      if (validated.to_block) path += `&to_block=${validated.to_block}`;
+      if (validated.limit) path += `&limit=${validated.limit}`;
+      if (validated.cursor) path += `&cursor=${validated.cursor}`;
+      const data = await moralisFetch(path);
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    }
+  );
+
+  srv.registerTool(
+    "get_top_gainers",
+    {
+      title: "Get Top Gainers",
+      description: "Identify tokens with the highest price increases over a period",
+      inputSchema: z.object({
+        chain: z.string().optional().describe("Comma-separated chain names to filter (e.g. eth,polygon,bsc)"),
+        limit: z.number().int().min(1).max(50).optional().describe("Number of results to return (max 50)"),
+      }),
+    },
+    async (args) => {
+      const validated = z.object({
+        chain: z.string().optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      }).parse(args);
+      let path = `/discovery/tokens/top-gainers`;
+      const params = [];
+      if (validated.chain) params.push(`chain=${validated.chain}`);
+      if (validated.limit) params.push(`limit=${validated.limit}`);
+      if (params.length) path += `?${params.join("&")}`;
+      const data = await moralisFetch(path);
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    }
+  );
+
+  srv.registerTool(
+    "get_top_losers",
+    {
+      title: "Get Top Losers",
+      description: "Identify tokens with the highest price decreases over a period",
+      inputSchema: z.object({
+        chain: z.string().optional().describe("Comma-separated chain names to filter (e.g. eth,polygon,bsc)"),
+        limit: z.number().int().min(1).max(50).optional().describe("Number of results to return (max 50)"),
+      }),
+    },
+    async (args) => {
+      const validated = z.object({
+        chain: z.string().optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      }).parse(args);
+      let path = `/discovery/tokens/top-losers`;
+      const params = [];
+      if (validated.chain) params.push(`chain=${validated.chain}`);
+      if (validated.limit) params.push(`limit=${validated.limit}`);
+      if (params.length) path += `?${params.join("&")}`;
+      const data = await moralisFetch(path);
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    }
+  );
+
   return srv;
 }
 
@@ -93,6 +294,13 @@ app.use(cors({
 
 app.post("/mcp", async (req, res) => {
   try {
+    // Normalize Accept header — MCP Streamable HTTP requires
+    // both application/json and text/event-stream, but the agent
+    // runner may not send the streaming Accept header.
+    if (!req.headers.accept) {
+      req.headers.accept = "application/json, text/event-stream";
+    }
+
     const sessionId = req.headers["mcp-session-id"];
     let transport, srv;
     if (sessionId && sessions.has(sessionId)) {

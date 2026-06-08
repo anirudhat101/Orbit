@@ -15,7 +15,8 @@
     "invoke:gpt": "hardhat run 04-somnia-gpt/scripts/invoke.ts --network somnia",
     "deploy:orbit": "hardhat run scripts/deploy.ts --network somnia",
     "invoke:orbit": "hardhat run scripts/invoke.ts --network somnia",
-    "swap:test": "hardhat run scripts/swap-test.ts --network somnia"
+    "swap:test": "hardhat run scripts/swap-test.ts --network somnia",
+    "test:tools": "hardhat run scripts/test-tools.ts --network somnia"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",
