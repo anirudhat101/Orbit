@@ -1,5 +1,5 @@
 import hre from "hardhat";
-import { formatUnits } from "viem";
+import { formatUnits, keccak256, toHex, slice, encodeAbiParameters, parseAbiParameters } from "viem";
 
 const FACTORY = "0x13fa49215C180Acce0f5EEcB7d4900987d407930";
 const ROUTER  = "0xE94de02e52Eaf9F0f6Bf7f16E4927FcBc2c09bC7";
@@ -41,84 +41,54 @@ async function main() {
     if (ok) pass++; else fail++;
   }
 
-  // ── 2. Token pairs → pool ──
-  console.log("\n─── 2. Factory.poolByPair ───");
-  const pairs: [string, string, string][] = [
-    ["WSTT→USDC", WSTT, USDC],
-    ["WETH→USDC", WETH, USDC],
+  // ── 2. Probe factory functions ──
+  console.log("\n─── 2. Probing factory selectors ───");
+  const SELECTORS = [
+    { sig: "poolByPair(address,address)", name: "poolByPair" },
+    { sig: "pools(address,address)", name: "pools" },
+    { sig: "getPool(address,address)", name: "getPool" },
+    { sig: "pool(address,address)", name: "pool" },
+    { sig: "poolByPair(address,address,address)", name: "poolByPair3" },
+    { sig: "poolForPair(address,address)", name: "poolForPair" },
   ];
-  const pools: Record<string, `0x${string}`> = {};
-  for (const [label, a, b] of pairs) {
+  for (const { sig, name } of SELECTORS) {
+    const selector = slice(keccak256(toHex(sig)), 0, 4);
+    const encodedArgs = encodeAbiParameters(
+      parseAbiParameters("address, address"),
+      [WSTT, USDC]
+    );
+    const data = (selector + encodedArgs.slice(2)) as `0x${string}`;
     try {
-      const pool = await publicClient.readContract({
-        address: FACTORY, abi: FACTORY_ABI, functionName: "poolByPair", args: [a, b],
-      }) as `0x${string}`;
-      pools[label] = pool;
-      const code = await publicClient.getBytecode({ address: pool });
-      const ok = code && code !== "0x";
-      console.log(`  ${label}: ${pool} → ${ok ? "HAS CODE" : "NO CODE"}`);
-      if (ok) pass++; else fail++;
+      const result = await publicClient.call({ to: FACTORY, data });
+      const pool = result.data && result.data !== "0x" ? result.data : NULL;
+      console.log(`  ${name}: selector=${selector} → pool=${pool}`);
+      pass++;
     } catch (e) {
-      console.log(`  ${label}: ERROR — ${e instanceof Error ? e.message.slice(0, 120) : e}`);
+      const msg = e instanceof Error ? e.message.slice(0, 100) : String(e);
+      console.log(`  ${name}: selector=${selector} → REVERT (${msg})`);
       fail++;
     }
   }
 
-  // ── 3. Pool state ──
-  console.log("\n─── 3. Pool state ───");
-  for (const [label, poolAddr] of Object.entries(pools)) {
-    if (!poolAddr || poolAddr === NULL) {
-      console.log(`  ${label}: SKIP (no pool)`);
-      continue;
+  // ── 3. Direct pool state (known pool from earlier tests) ──
+  console.log("\n─── 3. Direct pool state ───");
+  const KNOWN_POOL = "0xdc62e02e46CF247582FaC404b18580a46756C1C6";
+  const code = await publicClient.getBytecode({ address: KNOWN_POOL });
+  console.log(`  Known pool ${KNOWN_POOL} has code: ${code && code !== "0x" ? "YES" : "NO"}`);
+  if (code && code !== "0x") {
+    pass++;
+    for (const method of ["globalState", "liquidity", "fee", "token0", "token1"] as const) {
+      try {
+        const r = await publicClient.readContract({ address: KNOWN_POOL, abi: POOL_STATE_ABI, functionName: method, args: [] });
+        console.log(`  ${method}: ${JSON.stringify(r)}`);
+        pass++;
+      } catch (e) {
+        console.log(`  ${method}: ERROR — ${e instanceof Error ? e.message.slice(0, 120) : e}`);
+        fail++;
+      }
     }
-    // globalState
-    try {
-      const gs = await publicClient.readContract({
-        address: poolAddr, abi: POOL_STATE_ABI, functionName: "globalState", args: [],
-      }) as [bigint, number, number, number, number, boolean];
-      console.log(`  ${label} globalState:`);
-      console.log(`    price: ${gs[0]}`);
-      console.log(`    tick:  ${gs[1]}`);
-      console.log(`    fee:   ${gs[2]}`);
-      pass++;
-    } catch (e) {
-      console.log(`  ${label} globalState: ERROR — ${e instanceof Error ? e.message.slice(0, 120) : e}`);
-      fail++;
-    }
-    // liquidity
-    try {
-      const liq = await publicClient.readContract({
-        address: poolAddr, abi: POOL_STATE_ABI, functionName: "liquidity", args: [],
-      }) as bigint;
-      console.log(`  ${label} liquidity: ${liq}`);
-      pass++;
-    } catch (e) {
-      console.log(`  ${label} liquidity: ERROR — ${e instanceof Error ? e.message.slice(0, 120) : e}`);
-      fail++;
-    }
-    // fee
-    try {
-      const fee = await publicClient.readContract({
-        address: poolAddr, abi: POOL_STATE_ABI, functionName: "fee", args: [],
-      }) as number;
-      console.log(`  ${label} fee: ${fee}`);
-      pass++;
-    } catch (e) {
-      console.log(`  ${label} fee: ERROR — ${e instanceof Error ? e.message.slice(0, 120) : e}`);
-      fail++;
-    }
-    // token0 / token1
-    try {
-      const [t0, t1] = await Promise.all([
-        publicClient.readContract({ address: poolAddr, abi: POOL_STATE_ABI, functionName: "token0", args: [] }),
-        publicClient.readContract({ address: poolAddr, abi: POOL_STATE_ABI, functionName: "token1", args: [] }),
-      ]);
-      console.log(`  ${label} tokens: token0=${t0}, token1=${t1}`);
-      pass++;
-    } catch (e) {
-      console.log(`  ${label} tokens: ERROR — ${e instanceof Error ? e.message.slice(0, 120) : e}`);
-      fail++;
-    }
+  } else {
+    fail++;
   }
 
   // ── 4. ERC20 balances (for resolveToken sanity check) ──

@@ -286,6 +286,7 @@ function createServer() {
 const sessions = new Map();
 
 const app = express();
+app.use(express.json());
 app.use(cors({
   origin: "*",
   methods: "GET,POST,DELETE,OPTIONS",
@@ -294,27 +295,33 @@ app.use(cors({
 
 app.post("/mcp", async (req, res) => {
   try {
-    // Normalize Accept header — MCP Streamable HTTP requires
-    // both application/json and text/event-stream, but the agent
-    // runner may not send the streaming Accept header.
     if (!req.headers.accept) {
       req.headers.accept = "application/json, text/event-stream";
     }
 
     const sessionId = req.headers["mcp-session-id"];
     let transport, srv;
+
     if (sessionId && sessions.has(sessionId)) {
       ({ transport, srv } = sessions.get(sessionId));
     } else {
+      // Generate the ID eagerly so we can store the session BEFORE handleRequest runs
+      const newSessionId = randomUUID();
+
       srv = createServer();
       transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
+        sessionIdGenerator: () => newSessionId,
         onsessioninitialized: (sid) => {
           sessions.set(sid, { transport, srv });
         },
       });
+
+      // Store immediately — don't wait for onsessioninitialized
+      sessions.set(newSessionId, { transport, srv });
+
       await srv.connect(transport);
     }
+
     await transport.handleRequest(req, res);
   } catch (err) {
     console.error("POST /mcp error:", err);
@@ -323,7 +330,6 @@ app.post("/mcp", async (req, res) => {
     }
   }
 });
-
 app.get("/mcp", async (req, res) => {
   try {
     const sessionId = req.headers["mcp-session-id"];

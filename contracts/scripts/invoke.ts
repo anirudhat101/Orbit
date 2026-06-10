@@ -1,7 +1,7 @@
 import hre from "hardhat";
 import { formatUnits, hexToString } from "viem";
 // 0x0ed8db1c8867a2e77d8f25b62cb21723f78839ce
-const CONTRACT_ADDRESS = "0xc13dd46cb4301510faaa5d42979e795a325e1165" as `0x${string}`;
+const CONTRACT_ADDRESS = "0xefff6afb86f2f012a0c3820e07ed22eee08b247b" as `0x${string}`;
 const POLL_INTERVAL = 3000;
 const TIMEOUT = 300_000;
 const SUBCOMMITTEE_SIZE = 3n;
@@ -12,7 +12,7 @@ async function main() {
   console.log("║        Orbit — Ask a Question          ║");
   console.log("╚════════════════════════════════════════════╝\n");
 
-  const query = process.argv[2] || "swap 0.1 stt to wstt" //"get pool for stt and usdc token"//
+  const query = process.argv[2] || "Get Top 3 token holders of USDCusdc address: 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eb48" //"get pool for stt and usdc token"//
   console.log(`Query: "${query}"\n`);
 
   const orbit = await hre.viem.getContractAt("Orbit", CONTRACT_ADDRESS);
@@ -21,10 +21,10 @@ async function main() {
   // Check deposit
   const baseDeposit = await orbit.read.getRequiredDeposit();
   const deposit = baseDeposit + PRICE_PER_AGENT * SUBCOMMITTEE_SIZE;
-  const totalNeeded = deposit * BigInt(5);
+  const totalNeeded = deposit * BigInt(2);
   console.log(`Required deposit per request: ${formatUnits(deposit, 18)} STT`);
   console.log(`  (base: ${formatUnits(baseDeposit, 18)} + subcommittee: ${formatUnits(PRICE_PER_AGENT * SUBCOMMITTEE_SIZE, 18)})`);
-  console.log(`Sending ${formatUnits(totalNeeded, 18)} STT (5x for multi-step)\n`);
+  console.log(`Sending ${formatUnits(totalNeeded, 18)} STT \n`);
 
   // Send query
   console.log("📡 Sending query to Orbit...");
